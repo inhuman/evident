@@ -35,10 +35,16 @@ const OutEnv = "EVIDENT_OUT"
 
 // Main runs the package tests and then judges reqs over everything recorded in
 // Suite, so classes may be covered by different tests. Call it from TestMain.
+func Main(m *testing.M, reqs ...evident.Requirement) {
+	os.Exit(Run(m, reqs...))
+}
+
+// Run is Main for a TestMain that has teardown to do: it returns the exit code
+// instead of exiting.
 //
 // A filtered run (-run/-skip) cannot cover every class; verdicts are printed but
 // do not fail it. Unfiltered runs — what CI does — fail on anything but OK.
-func Main(m *testing.M, reqs ...evident.Requirement) {
+func Run(m *testing.M, reqs ...evident.Requirement) int {
 	code := m.Run()
 
 	filtered := flagSet("test.run") || flagSet("test.skip")
@@ -59,7 +65,7 @@ func Main(m *testing.M, reqs ...evident.Requirement) {
 			code = 1
 		}
 	}
-	os.Exit(code)
+	return code
 }
 
 func flagSet(name string) bool {
