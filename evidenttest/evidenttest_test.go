@@ -86,6 +86,30 @@ func TestLinesCarryRunMetadataAndAppend(t *testing.T) {
 	}
 }
 
+func TestRelativeOutIsFromModuleRoot(t *testing.T) {
+	root := t.TempDir()
+	pkg := filepath.Join(root, "internal", "pkg")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(pkg)
+	t.Setenv(OutEnv, "v.jsonl")
+
+	v := evident.Judge(req, nil)
+	if err := appendLines([]Line{{Kind: "verdict", Verdict: &v}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(readLines(t, filepath.Join(root, "v.jsonl"))) != 1 {
+		t.Fatal("relative EVIDENT_OUT must land next to go.mod")
+	}
+	if _, err := os.Stat(filepath.Join(pkg, "v.jsonl")); err == nil {
+		t.Fatal("relative EVIDENT_OUT must not land in the package directory")
+	}
+}
+
 func TestRegistryRecordsIDsAndRejectsDuplicates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "v.jsonl")
 	t.Setenv(OutEnv, path)

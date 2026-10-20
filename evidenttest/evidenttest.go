@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -32,6 +33,9 @@ var Suite = &evident.Ledger{}
 
 // OutEnv names the file Main appends verdicts to as JSON lines, so a CI step
 // (`evident gate`) can build one requirement × class matrix across packages.
+// `go test ./...` runs every package in its own directory, so a relative path
+// is taken from the module root (the nearest go.mod above the package), not
+// from the package: all packages then append to the one file the gate reads.
 const OutEnv = "EVIDENT_OUT"
 
 // StrictEnv forces enforcement even for filtered runs. CI=true implies it, so a
@@ -152,6 +156,24 @@ func firstEnv(keys ...string) string {
 	return ""
 }
 
+func outPath(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(filepath.Join(d, "go.mod")); err == nil {
+			return filepath.Join(d, path), nil
+		}
+		if filepath.Dir(d) == d {
+			return "", fmt.Errorf("%s=%s is relative but no go.mod is above %s", OutEnv, path, dir)
+		}
+	}
+}
+
 func flagSet(name string) bool {
 	f := flag.Lookup(name)
 	return f != nil && f.Value.String() != ""
@@ -161,6 +183,10 @@ func appendLines(lines []Line) error {
 	path := os.Getenv(OutEnv)
 	if path == "" || len(lines) == 0 {
 		return nil
+	}
+	path, err := outPath(path)
+	if err != nil {
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
