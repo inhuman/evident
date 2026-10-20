@@ -120,6 +120,12 @@ var Gate = evidentlean.MustRequirement(gateModel, lock, "only an unlocked admin 
 The requirement's `Domain` is the whole table; its oracle class compares every
 observation with the model. The harness must drive the live code through **every row**.
 
+The output may be a structure (`structure Outcome … deriving Lean.ToJson`): it is
+exported as a JSON object and compared by value, so a model can pin several
+observables of one run at once — e.g. the reply, which upstreams were asked in
+which order, and which failures were logged. The harness witnesses the same shape
+as a `map[string]any`; numbers, slices and nested maps compare across Go types.
+
 ## CLI
 
 ```

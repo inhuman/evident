@@ -223,6 +223,10 @@ func TestEqualAndIsAcrossTypes(t *testing.T) {
 		{[]string{"a"}, []any{"a"}, true},
 		{[]string{"a"}, []string{"b"}, false},
 		{nil, nil, true},
+		{map[string]any{"reply": "corp", "asked": []string{"corp1", "embedded"}, "n": 2},
+			map[string]any{"reply": "corp", "asked": []any{"corp1", "embedded"}, "n": float64(2)}, true},
+		{Facts{"a": []string{"x"}}, map[string]any{"a": []any{"x"}}, true},
+		{map[string]any{"asked": []string{"embedded", "corp1"}}, map[string]any{"asked": []any{"corp1", "embedded"}}, false},
 	}
 	for _, c := range cases {
 		if got := Equal(c.a, c.b); got != c.want {

@@ -63,8 +63,9 @@ func Equal(a, b any) bool {
 	return reflect.DeepEqual(na, nb)
 }
 
-// normalize maps every numeric kind to float64 and []string to []any, the
-// shapes JSON decoding produces.
+// normalize maps every numeric kind to float64, slices to []any and maps with
+// string keys to map[string]any, recursively: the shapes JSON decoding produces,
+// so a structured model output compares with what a Go harness witnessed.
 func normalize(v any) any {
 	if v == nil {
 		return nil
@@ -84,6 +85,15 @@ func normalize(v any) any {
 		out := make([]any, rv.Len())
 		for i := range rv.Len() {
 			out[i] = normalize(rv.Index(i).Interface())
+		}
+		return out
+	case reflect.Map:
+		if rv.Type().Key().Kind() != reflect.String {
+			return v
+		}
+		out := make(map[string]any, rv.Len())
+		for it := rv.MapRange(); it.Next(); {
+			out[it.Key().String()] = normalize(it.Value().Interface())
 		}
 		return out
 	}
