@@ -1,7 +1,7 @@
 package evidenttest
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -45,31 +45,64 @@ func TestCheckFailsOnIncomplete(t *testing.T) {
 	}
 }
 
-func TestAppendJSONL(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "v.jsonl")
-	v := evident.Judge(req, nil)
-	for range 2 {
-		if err := appendJSONL(path, []evident.Verdict{v}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	data, err := os.ReadFile(path)
+func readLines(t *testing.T, path string) []Line {
+	t.Helper()
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	n := 0
-	for dec.More() {
-		var got evident.Verdict
-		if err := dec.Decode(&got); err != nil {
+	defer f.Close()
+	var out []Line
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var l Line
+		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
 			t.Fatal(err)
 		}
-		if got.Status != evident.Incomplete || got.Requirement != "r" {
-			t.Fatalf("decoded %+v", got)
-		}
-		n++
+		out = append(out, l)
 	}
-	if n != 2 {
-		t.Fatalf("lines = %d, want 2 (append, not overwrite)", n)
+	return out
+}
+
+func TestLinesCarryRunMetadataAndAppend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v.jsonl")
+	t.Setenv(OutEnv, path)
+	t.Setenv("CI_COMMIT_SHA", "abc123")
+	t.Setenv("CI_PIPELINE_ID", "42")
+
+	v := evident.Judge(req, nil)
+	for range 2 {
+		if err := appendLines([]Line{meta(Line{Kind: "verdict", Verdict: &v, Filtered: true})}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := readLines(t, path)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want 2 (append, not overwrite)", len(lines))
+	}
+	l := lines[1]
+	if l.Verdict.Status != evident.Incomplete || l.Commit != "abc123" || l.Run != "42" || !l.Filtered {
+		t.Fatalf("line = %+v", l)
+	}
+}
+
+func TestRegistryRecordsIDsAndRejectsDuplicates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v.jsonl")
+	t.Setenv(OutEnv, path)
+
+	r := &recorder{TB: t}
+	Registry(r, req, evident.Requirement{ID: "other"})
+	if r.failed {
+		t.Fatal("unique IDs must register")
+	}
+	lines := readLines(t, path)
+	if len(lines) != 1 || lines[0].Kind != "registry" || len(lines[0].Registry) != 2 {
+		t.Fatalf("registry line = %+v", lines)
+	}
+
+	r = &recorder{TB: t}
+	Registry(r, req, req)
+	if !r.failed {
+		t.Fatal("duplicate IDs must fail the registry")
 	}
 }

@@ -1,0 +1,9 @@
+name = "evident"
+version = "0.2.0"
+defaultTargets = ["Evident"]
+
+[[lean_lib]]
+name = "Evident"
+
+[[lean_lib]]
+name = "EvidentTest"

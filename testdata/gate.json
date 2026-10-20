@@ -1,0 +1,22 @@
+{"theorems":
+ [{"statement":
+   "∀ (r : EvidentTest.Gate.Role), EvidentTest.Gate.canOpen r Bool.true = Bool.false",
+   "name": "EvidentTest.Gate.locked_never_opens",
+   "axioms": ["propext"]},
+  {"statement":
+   "∀ (r : EvidentTest.Gate.Role) (l : Bool), EvidentTest.Gate.canOpen r l = Bool.true → r = EvidentTest.Gate.Role.admin",
+   "name": "EvidentTest.Gate.only_admin_opens",
+   "axioms": ["propext"]},
+  {"statement": "∃ r, EvidentTest.Gate.canOpen r Bool.false = Bool.true",
+   "name": "EvidentTest.Gate.some_role_opens",
+   "axioms": ["propext"]}],
+ "rows":
+ [{"out": false, "in": {"role": "guest", "locked": false}},
+  {"out": false, "in": {"role": "guest", "locked": true}},
+  {"out": false, "in": {"role": "user", "locked": false}},
+  {"out": false, "in": {"role": "user", "locked": true}},
+  {"out": true, "in": {"role": "admin", "locked": false}},
+  {"out": false, "in": {"role": "admin", "locked": true}}],
+ "output": "open",
+ "inputs": ["role", "locked"],
+ "id": "test.gate"}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 var corsReq = Requirement{
@@ -15,7 +16,11 @@ var corsReq = Requirement{
 }
 
 func obs(spec string, src Source, f Facts) Observation {
-	return Observation{Spec: spec, Source: src, Facts: f}
+	o := Observation{Spec: spec, Source: src, Facts: f}
+	if src == Harness {
+		o.Where = "some_test.go:1"
+	}
+	return o
 }
 
 func TestJudge(t *testing.T) {
@@ -65,6 +70,13 @@ func TestJudge(t *testing.T) {
 			violations: 1,
 			observed:   []int{0},
 		},
+		{
+			name:       "duplicate class names",
+			req:        Requirement{ID: "x", Classes: []Class{{Name: "a", When: Always}, {Name: "a", When: Always}}},
+			want:       Violated,
+			violations: 1,
+			observed:   []int{0, 0},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,11 +120,78 @@ func TestJudgeHarnessOnlyClassIgnoresSelfReport(t *testing.T) {
 	}
 }
 
-func TestJudgeOverlappingClassesBothCount(t *testing.T) {
+func TestHarnessFactMustComeFromATestFile(t *testing.T) {
+	req := Requirement{ID: "x", Classes: []Class{{Name: "any", When: Always}}}
+	forged := Observation{Spec: "x", Source: Harness, Facts: Facts{}, Where: "/app/internal/forwarder.go:42"}
+	v := Judge(req, []Observation{forged})
+	if v.Status != Violated || !strings.Contains(v.Violations[0].Err, "outside a _test.go") {
+		t.Fatalf("harness fact from production code accepted\n%s", v)
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Record must refuse harness facts: only Witness stamps their origin")
+		}
+	}()
+	var l Ledger
+	l.Record(Observation{Spec: "x", Source: Harness, Where: "fake_test.go:1"})
+}
+
+func TestRequiredFactsMustBePresent(t *testing.T) {
+	req := Requirement{ID: "m", Classes: []Class{{
+		Name:    "migrated",
+		When:    Is("case", "rows"),
+		Then:    func(f Facts) error { return Expect("got", f.String("want"))(f) },
+		Require: []string{"got", "want"},
+	}}}
+	v := Judge(req, []Observation{obs("m", Harness, Facts{"case": "rows"})})
+	if v.Status != Violated || !strings.Contains(v.Violations[0].Err, "missing required facts") {
+		t.Fatalf("a class without its facts must not pass\n%s", v)
+	}
+}
+
+func TestDomainCoverage(t *testing.T) {
+	req := Requirement{
+		ID:      "d",
+		Classes: []Class{{Name: "oracle", When: Always, Then: func(f Facts) error { return Expect("out", f.Bool("a") && f.Bool("b"))(f) }}},
+		Domain: &Domain{Keys: []string{"a", "b"}, Rows: []Facts{
+			{"a": false, "b": false}, {"a": false, "b": true}, {"a": true, "b": false}, {"a": true, "b": true},
+		}},
+	}
+	row := func(a, b, out bool) Observation { return obs("d", Harness, Facts{"a": a, "b": b, "out": out}) }
+
+	partial := Judge(req, []Observation{row(true, true, true), row(false, false, false)})
+	if partial.Status != Incomplete || partial.Domain.Covered != 2 || len(partial.Domain.Missing) != 2 {
+		t.Fatalf("2 of 4 rows must be incomplete\n%s", partial)
+	}
+
+	full := Judge(req, []Observation{row(true, true, true), row(false, false, false), row(true, false, false), row(false, true, false)})
+	if full.Status != OK {
+		t.Fatalf("all rows observed must be ok\n%s", full)
+	}
+
+	outside := Judge(req, []Observation{obs("d", Harness, Facts{"a": "typo", "b": true, "out": false})})
+	if outside.Status != Violated || !strings.Contains(outside.Violations[0].Err, "outside the domain") {
+		t.Fatalf("observation outside the domain must be a violation\n%s", outside)
+	}
+}
+
+func TestDomainRowsMatchAcrossNumericTypes(t *testing.T) {
+	req := Requirement{
+		ID:      "n",
+		Classes: []Class{{Name: "any", When: Always}},
+		Domain:  &Domain{Keys: []string{"code"}, Rows: []Facts{{"code": float64(200)}}},
+	}
+	if v := Judge(req, []Observation{obs("n", Harness, Facts{"code": int64(200)})}); v.Status != OK {
+		t.Fatalf("int64 200 must match a JSON 200 row\n%s", v)
+	}
+}
+
+func TestOverlappingClassesBothCount(t *testing.T) {
 	req := Requirement{
 		ID: "x",
 		Classes: []Class{
-			{Name: "any", When: func(Facts) bool { return true }},
+			{Name: "any", When: Always},
 			{Name: "strict", When: Is("k", "v"), Then: func(Facts) error { return errors.New("boom") }},
 		},
 	}
@@ -132,10 +211,45 @@ func TestVerdictStringMarksUnobservedAndViolations(t *testing.T) {
 	}
 }
 
+func TestEqualAndIsAcrossTypes(t *testing.T) {
+	cases := []struct {
+		a, b any
+		want bool
+	}{
+		{200, int64(200), true},
+		{uint16(200), float64(200), true},
+		{float32(1.5), 1.5, true},
+		{200, "200", false},
+		{[]string{"a"}, []any{"a"}, true},
+		{[]string{"a"}, []string{"b"}, false},
+		{nil, nil, true},
+	}
+	for _, c := range cases {
+		if got := Equal(c.a, c.b); got != c.want {
+			t.Errorf("Equal(%#v, %#v) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+	if !Is("status", 200)(Facts{"status": int64(200)}) {
+		t.Error("Is(200) must match int64 200")
+	}
+	if err := Expect("hosts", []string{"a"})(Facts{"hosts": []any{"a"}}); err != nil {
+		t.Errorf("Expect on slices: %v", err)
+	}
+	if err := Expect("x", false)(Facts{}); err == nil {
+		t.Error("Expect must fail on a missing key even when want is the zero value")
+	}
+}
+
 func TestFactsAccessors(t *testing.T) {
-	f := Facts{"s": "x", "b": true, "i": int64(3), "f": float64(4), "l": []any{"a", "b"}, "ls": []string{"c"}}
-	if f.String("s") != "x" || !f.Bool("b") || f.Int("i") != 3 || f.Int("f") != 4 {
+	f := Facts{
+		"s": "x", "b": true, "i": int64(3), "f": float64(4), "u": uint64(9000), "d": 9 * time.Second,
+		"l": []any{"a", "b"}, "ls": []string{"c"},
+	}
+	if f.String("s") != "x" || !f.Bool("b") || f.Int("i") != 3 || f.Int("f") != 4 || f.Int("u") != 9000 {
 		t.Fatalf("scalar accessors broken: %v", f)
+	}
+	if f.Int("d") != int64(9*time.Second) {
+		t.Fatalf("Duration must read as nanoseconds, got %d", f.Int("d"))
 	}
 	if got := f.Strings("l"); len(got) != 2 || got[1] != "b" {
 		t.Fatalf("Strings([]any) = %v", got)
