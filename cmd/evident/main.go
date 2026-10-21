@@ -3,10 +3,11 @@
 //	evident lock   <lock.json> <model.json>...   pin models (spec owner runs this)
 //	evident verify <lock.json> <model.json>...   fail if a model drifted from its lock
 //	evident gate   <verdicts.jsonl>              fail unless every registered requirement is ok
+//	evident junit  [-o report.xml] [-lock lock.json] <verdicts.jsonl>... [<model.json>...]
+//	                                             JUnit report: requirements, classes, domains, theorems
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,7 +30,8 @@ func main() {
 
 func run(args []string, out io.Writer) error {
 	if len(args) < 2 {
-		return errors.New("usage: evident lock|verify <lock.json> <model.json>... | evident gate <verdicts.jsonl>")
+		return errors.New("usage: evident lock|verify <lock.json> <model.json>... | evident gate <verdicts.jsonl> | " +
+			"evident junit [-o report.xml] [-lock lock.json] <verdicts.jsonl>... [<model.json>...]")
 	}
 	switch args[0] {
 	case "lock":
@@ -38,6 +40,8 @@ func run(args []string, out io.Writer) error {
 		return verify(args[1], args[2:], out)
 	case "gate":
 		return gate(args[1], out)
+	case "junit":
+		return junit(args[1:], out)
 	}
 	return fmt.Errorf("unknown command %q", args[0])
 }
@@ -115,21 +119,9 @@ func verify(lockPath string, modelPaths []string, out io.Writer) error {
 // gate reads EVIDENT_OUT lines: every registered requirement needs an ok
 // verdict from an enforced run; the last verdict per requirement wins.
 func gate(path string, out io.Writer) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
 	registered := map[string]bool{}
 	last := map[string]evidenttest.Line{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 64<<20)
-	for n := 1; sc.Scan(); n++ {
-		var l evidenttest.Line
-		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
-			return fmt.Errorf("%s:%d: %w", path, n, err)
-		}
+	if err := readLines(path, func(l evidenttest.Line) {
 		switch l.Kind {
 		case "registry":
 			for _, id := range l.Registry {
@@ -138,8 +130,7 @@ func gate(path string, out io.Writer) error {
 		case "verdict":
 			last[l.Verdict.Requirement] = l
 		}
-	}
-	if err := sc.Err(); err != nil {
+	}); err != nil {
 		return err
 	}
 	if len(registered) == 0 {
